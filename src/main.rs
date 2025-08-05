@@ -58,20 +58,14 @@ async fn post_chat(req: Request<Incoming>) -> ResponseResult {
         }
     };
 
-    // 1. Create a thread-safe MPSC channel.
     let (sender, receiver) = channel(256);
 
-    // 2. Spawn a new task to do the non-Sync work.
-    //    We move the sender and the chat data into this task.
     tokio::spawn(async move {
         add_chat(chat).await;
         process_chat(sender).await;
     });
 
-    // 3. Create a stream from the receiver. ReceiverStream is Send + Sync.
     let stream = ReceiverStream::new(receiver);
-
-    // 4. Wrap it in StreamBody. This now works because the stream is Sync.
     let stream_body = StreamBody::new(stream);
 
     Ok(Response::builder()
