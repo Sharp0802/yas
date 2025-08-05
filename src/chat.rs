@@ -55,9 +55,9 @@ async gen fn project_to_data(mut stream: ResponseStream) -> Result<Content, Box<
 }
 
 async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) -> bool {
-    let mut contents = HISTORY.lock().await;
+    let mut history = HISTORY.lock().await;
 
-    let contents_copy = contents
+    let contents_copy = history
         .iter()
         .cloned()
         .map(Into::into)
@@ -71,7 +71,7 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
         Ok(stream) => stream,
         Err(e) => {
             let chat = Content::system(vec![
-                Part::new(Data::Text(format!("Error while generating stream content: {:?}", e)))
+                Part::new(Data::from(format!("Error while generating stream content: {:?}", e)))
             ]);
             let _ = sender.send(Ok(frame_from_json(&chat))).await;
             return false;
@@ -86,14 +86,14 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
             Ok(msg) => msg,
             Err(e) => {
                 let chat = Content::system(vec![
-                    Part::new(Data::Text(format!("Error while iterating stream: {:?}", e)))
+                    Part::new(Data::from(format!("Error while iterating stream: {:?}", e)))
                 ]);
                 let _ = sender.send(Ok(frame_from_json(&chat))).await;
                 continue;
             }
         };
 
-        contents.push(msg.clone());
+        history.push(msg.clone());
 
         let _ = sender.send(Ok(frame_from_json(&msg))).await;
 
@@ -112,14 +112,17 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
                         function_responses.push(Part::new(Data::FunctionResponse(resp)))
                     }
                     Err(e) => {
-                        function_responses.push(Part::new(Data::Text(e)))
+                        function_responses.push(Part::new(Data::from(e)))
                     }
                 };
             }
         }
 
-        let function_response_content = Content::tool(function_responses);
-        let _ = sender.send(Ok(frame_from_json(&function_response_content))).await;
+        if !function_responses.is_empty() {
+            let function_response_content = Content::tool(function_responses);
+            let _ = sender.send(Ok(frame_from_json(&function_response_content))).await;
+            history.push(function_response_content);
+        }
     }
 
     function_called
