@@ -32,8 +32,8 @@ impl Into<prost_types::Struct> for Struct {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
 pub struct ListValue {
-    #[serde(flatten)]
     pub values: Vec<Value>,
 }
 
@@ -91,8 +91,8 @@ impl Into<prost_types::value::Kind> for Kind {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
 pub struct Value {
-    #[serde(flatten)]
     pub kind: Option<Kind>,
 }
 
