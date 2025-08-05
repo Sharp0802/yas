@@ -219,6 +219,16 @@ pub fn search_fs_decl() -> FunctionDeclaration {
         Search file or directory on user's filesystem using glob expression.
         Error and successful result can be returned at once,
         when if operation failed for only some of files (e.g. insufficient permission)
+
+        ## Usage
+
+        The glob expression syntax is same as standard UNIX glob expression syntax.
+
+        ## Examples
+
+        - `/repos/**/*.cxx` : Find `.cxx` file in `/repos` recursively
+        - `/repos/*.h` : Find `.h` file in `/repos` not-recursively
+
         "#
         .to_string(),
         parameters: Some(Schema {
