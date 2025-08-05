@@ -13,6 +13,7 @@ use crate::defs::*;
 use crate::tools::search_fs_decl;
 use bytes::Bytes;
 use dotenv::dotenv;
+use google_ai_rs::{Client, GenerativeModel, Tool};
 use http::{header, Method, Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
@@ -20,12 +21,12 @@ use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env::var_os;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
-use google_ai_rs::{Client, GenerativeModel, Tool};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::channel;
 use tokio_stream::wrappers::ReceiverStream;
@@ -78,30 +79,45 @@ async fn post_chat(req: Request<Incoming>) -> ResponseResult {
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(stream_body.boxed())?) // .boxed() is now happy!
+        .body(stream_body.boxed())?)
+}
+
+macro_rules! static_file {
+    ($name:expr, $mime:expr) => {
+        ($name, ($mime, Bytes::from_static(include_bytes!(concat!("www", $name)))))
+    };
 }
 
 async fn handle_request(req: Request<Incoming>) -> ResponseResult {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") => {
-            let body = Bytes::from_static(include_bytes!("www/index.html"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/html")
-                .body(Full::new(body).boxed())?)
-        }
 
-        (&Method::GET, "/sse.js") => {
-            let body = Bytes::from_static(include_bytes!("www/sse.js"));
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/javascript")
-                .body(Full::new(body).boxed())?)
-        }
+    let files: HashMap<&'static str, (&'static str, Bytes)> = HashMap::from([
+        static_file!("/index.html", "text/html"),
+        static_file!("/main.js", "text/javascript"),
+        static_file!("/sse.js", "text/javascript"),
+        static_file!("/style.css", "text/css"),
+    ]);
 
+    let path = match req.uri().path() {
+        "/" => "/index.html",
+        v => v
+    };
+
+    match (req.method(), path) {
         (&Method::GET, "/chat") => get_chat().await,
-
         (&Method::POST, "/chat") => post_chat(req).await,
+
+        (&Method::GET, p) => {
+            let Some((mime, b)) = files.get(p) else {
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::new()).boxed())?)
+            };
+
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.to_string())
+                .body(Full::new(b.clone()).boxed())?)
+        }
 
         _ => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
