@@ -228,7 +228,6 @@ pub fn search_fs_decl() -> FunctionDeclaration {
                 "pattern".to_string(),
                 Schema {
                     r#type: 1, /* STRING */
-                    format: "pattern".to_string(),
                     description: "Glob expression to search".to_string(),
                     nullable: false,
                     ..Schema::default()
