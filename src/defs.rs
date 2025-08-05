@@ -263,9 +263,9 @@ impl Into<google_ai_rs::proto::CodeExecutionResult> for CodeExecutionResult {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Data {
-    Text(String),
+    Text{ text: String },
     InlineData(Blob),
     FunctionCall(FunctionCall),
     FunctionResponse(FunctionResponse),
@@ -274,10 +274,16 @@ pub enum Data {
     CodeExecutionResult(CodeExecutionResult),
 }
 
+impl From<String> for Data {
+    fn from(value: String) -> Self {
+        Data::Text { text: value }
+    }
+}
+
 impl From<google_ai_rs::Data> for Data {
     fn from(value: google_ai_rs::Data) -> Self {
         match value {
-            google_ai_rs::Data::Text(v) => Self::Text(v),
+            google_ai_rs::Data::Text(v) => Self::Text{ text: v },
             google_ai_rs::Data::InlineData(v) => Self::InlineData(v.into()),
             google_ai_rs::Data::FunctionCall(v) => Self::FunctionCall(v.into()),
             google_ai_rs::Data::FunctionResponse(v) => Self::FunctionResponse(v.into()),
@@ -291,7 +297,7 @@ impl From<google_ai_rs::Data> for Data {
 impl Into<google_ai_rs::Data> for Data {
     fn into(self) -> google_ai_rs::Data {
         match self {
-            Data::Text(v) => google_ai_rs::Data::Text(v),
+            Data::Text{ text } => google_ai_rs::Data::Text(text),
             Data::InlineData(v) => google_ai_rs::Data::InlineData(v.into()),
             Data::FunctionCall(v) => google_ai_rs::Data::FunctionCall(v.into()),
             Data::FunctionResponse(v) => google_ai_rs::Data::FunctionResponse(v.into()),
