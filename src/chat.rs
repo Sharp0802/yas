@@ -1,5 +1,5 @@
 use crate::defs::*;
-use crate::tools::handle_search_fs;
+use crate::tools::{handle_read_fs, handle_search_fs};
 use crate::MODEL;
 use bytes::Bytes;
 use hyper::body::Frame;
@@ -118,6 +118,7 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
 async fn handle_function_call(call: FunctionCall) -> Result<FunctionResponse, String> {
     match call.name.as_str() {
         "search_fs" => Ok(handle_search_fs(call.into()).into()),
+        "read_fs" => Ok(handle_read_fs(call.into()).into()),
         _ => Err(format!("Unknown function '{}'", call.name)),
     }
 }

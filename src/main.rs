@@ -4,17 +4,17 @@
 #![feature(str_as_str)]
 #![feature(associated_type_defaults)]
 
-mod tools;
-mod defs;
 mod chat;
+mod defs;
+mod tools;
 
 use crate::chat::{add_chat, process_chat};
 use crate::defs::*;
-use crate::tools::search_fs_decl;
+use crate::tools::{read_fs_decl, search_fs_decl};
 use bytes::Bytes;
 use dotenv::dotenv;
 use google_ai_rs::{Client, GenerativeModel, Tool};
-use http::{header, Method, Request, Response, StatusCode};
+use http::{Method, Request, Response, StatusCode, header};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::Incoming;
@@ -78,12 +78,17 @@ async fn post_chat(req: Request<Incoming>) -> ResponseResult {
 
 macro_rules! static_file {
     ($name:expr, $mime:expr) => {
-        ($name, ($mime, Bytes::from_static(include_bytes!(concat!("www", $name)))))
+        (
+            $name,
+            (
+                $mime,
+                Bytes::from_static(include_bytes!(concat!("www", $name))),
+            ),
+        )
     };
 }
 
 async fn handle_request(req: Request<Incoming>) -> ResponseResult {
-
     let files: HashMap<&'static str, (&'static str, Bytes)> = HashMap::from([
         static_file!("/index.html", "text/html"),
         static_file!("/main.js", "text/javascript"),
@@ -93,7 +98,7 @@ async fn handle_request(req: Request<Incoming>) -> ResponseResult {
 
     let path = match req.uri().path() {
         "/" => "/index.html",
-        v => v
+        v => v,
     };
 
     match (req.method(), path) {
@@ -104,7 +109,7 @@ async fn handle_request(req: Request<Incoming>) -> ResponseResult {
             let Some((mime, b)) = files.get(p) else {
                 return Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Full::new(Bytes::new()).boxed())?)
+                    .body(Full::new(Bytes::new()).boxed())?);
             };
 
             Ok(Response::builder()
@@ -136,7 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut model = GenerativeModel::new(CLIENT.get().unwrap(), "gemini-2.5-pro");
 
     model.tools = Some(vec![Tool {
-        function_declarations: vec![search_fs_decl()],
+        function_declarations: vec![search_fs_decl(), read_fs_decl()],
         ..Tool::default()
     }]);
 
