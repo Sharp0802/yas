@@ -1,0 +1,138 @@
+use crate::defs::*;
+use crate::tools::handle_search_fs;
+use crate::MODEL;
+use bytes::Bytes;
+use futures_util::future::poll_fn;
+use google_ai_rs::genai::ResponseStream;
+use hyper::body::Frame;
+use lazy_static::lazy_static;
+use serde::Serialize;
+use std::async_iter::AsyncIterator;
+use std::convert::Infallible;
+use std::error::Error;
+use std::pin::pin;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::Mutex;
+
+lazy_static! {
+    static ref HISTORY: Mutex<Vec<Content>> = Mutex::new(vec![]);
+}
+
+fn frame_from_json<T: Serialize>(v: &T) -> Frame<Bytes> {
+    let json = serde_json::to_string(v).unwrap();
+    Frame::data(Bytes::from(json))
+}
+
+pub async fn get_chat() -> Vec<Content> {
+    HISTORY.lock().await.clone()
+}
+
+pub async fn add_chat(chat: Content) {
+    HISTORY.lock().await.push(chat);
+}
+
+async gen fn project_to_data(mut stream: ResponseStream) -> Result<Content, Box<dyn Error + Send + Sync>> {
+    while let Some(part) = match stream.next().await {
+        Ok(part) => part,
+        Err(e) => {
+            yield Err(e.into());
+            return;
+        }
+    } {
+        let Some(candidate) = part.candidates.first() else {
+            continue;
+        };
+
+        if candidate.finish_reason != /* STOP */ 1 && candidate.finish_reason != /* NONE */ 0 {
+            yield Err(format!("Generation failed with code: {}", candidate.finish_reason).into());
+            return;
+        }
+
+        if let Some(content) = &candidate.content {
+            yield Ok(content.clone().into())
+        }
+    }
+}
+
+async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) -> bool {
+    let mut contents = HISTORY.lock().await;
+
+    let contents_copy = contents
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect::<Vec<google_ai_rs::Content>>();
+
+    let response_stream = match MODEL
+        .get()
+        .unwrap()
+        .stream_generate_content(contents_copy)
+        .await {
+        Ok(stream) => stream,
+        Err(e) => {
+            let chat = Content::system(vec![
+                Part::new(Data::Text(format!("Error while generating stream content: {:?}", e)))
+            ]);
+            let _ = sender.send(Ok(frame_from_json(&chat))).await;
+            return false;
+        }
+    };
+
+    let mut function_called = false;
+
+    let mut response_data_iterator = pin!(project_to_data(response_stream));
+    while let Some(msg) = poll_fn(|cx| response_data_iterator.as_mut().poll_next(cx)).await {
+        let msg: Content = match msg {
+            Ok(msg) => msg,
+            Err(e) => {
+                let chat = Content::system(vec![
+                    Part::new(Data::Text(format!("Error while iterating stream: {:?}", e)))
+                ]);
+                let _ = sender.send(Ok(frame_from_json(&chat))).await;
+                continue;
+            }
+        };
+
+        contents.push(msg.clone());
+
+        let _ = sender.send(Ok(frame_from_json(&msg))).await;
+
+        let mut function_responses: Vec<Part> = Vec::new();
+
+        for part in msg.parts {
+            let Some(data) = part.data else {
+                continue;
+            };
+
+            if let Data::FunctionCall(call) = data {
+                function_called = true;
+
+                match handle_function_call(call).await {
+                    Ok(resp) => {
+                        function_responses.push(Part::new(Data::FunctionResponse(resp)))
+                    }
+                    Err(e) => {
+                        function_responses.push(Part::new(Data::Text(e)))
+                    }
+                };
+            }
+        }
+
+        let function_response_content = Content::tool(function_responses);
+        let _ = sender.send(Ok(frame_from_json(&function_response_content))).await;
+    }
+
+    function_called
+}
+
+async fn handle_function_call(call: FunctionCall) -> Result<FunctionResponse, String> {
+    match call.name.as_str() {
+        "search_fs" => Ok(handle_search_fs(call.into()).into()),
+        _ => Err(format!("Unknown function '{}'", call.name)),
+    }
+}
+
+pub async fn process_chat(sender: Sender<Result<Frame<Bytes>, Infallible>>) {
+    while process_chat_once(&sender).await {
+    }
+}
