@@ -2,15 +2,10 @@ use crate::defs::*;
 use crate::tools::handle_search_fs;
 use crate::MODEL;
 use bytes::Bytes;
-use futures_util::future::poll_fn;
-use google_ai_rs::genai::ResponseStream;
 use hyper::body::Frame;
 use lazy_static::lazy_static;
 use serde::Serialize;
-use std::async_iter::AsyncIterator;
 use std::convert::Infallible;
-use std::error::Error;
-use std::pin::pin;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 
@@ -20,7 +15,8 @@ lazy_static! {
 
 fn frame_from_json<T: Serialize>(v: &T) -> Frame<Bytes> {
     let json = serde_json::to_string(v).unwrap();
-    Frame::data(Bytes::from(json))
+    let sse_event = format!("data: {}\n\n", json);
+    Frame::data(Bytes::from(sse_event))
 }
 
 pub async fn get_chat() -> Vec<Content> {
@@ -29,29 +25,6 @@ pub async fn get_chat() -> Vec<Content> {
 
 pub async fn add_chat(chat: Content) {
     HISTORY.lock().await.push(chat);
-}
-
-async gen fn project_to_data(mut stream: ResponseStream) -> Result<Content, Box<dyn Error + Send + Sync>> {
-    while let Some(part) = match stream.next().await {
-        Ok(part) => part,
-        Err(e) => {
-            yield Err(e.into());
-            return;
-        }
-    } {
-        let Some(candidate) = part.candidates.first() else {
-            continue;
-        };
-
-        if candidate.finish_reason != /* STOP */ 1 && candidate.finish_reason != /* NONE */ 0 {
-            yield Err(format!("Generation failed with code: {}", candidate.finish_reason).into());
-            return;
-        }
-
-        if let Some(content) = &candidate.content {
-            yield Ok(content.clone().into())
-        }
-    }
 }
 
 async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) -> bool {
@@ -63,7 +36,7 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
         .map(Into::into)
         .collect::<Vec<google_ai_rs::Content>>();
 
-    let response_stream = match MODEL
+    let mut response_stream = match MODEL
         .get()
         .unwrap()
         .stream_generate_content(contents_copy)
@@ -80,26 +53,40 @@ async fn process_chat_once(sender: &Sender<Result<Frame<Bytes>, Infallible>>) ->
 
     let mut function_called = false;
 
-    let mut response_data_iterator = pin!(project_to_data(response_stream));
-    while let Some(msg) = poll_fn(|cx| response_data_iterator.as_mut().poll_next(cx)).await {
-        let msg: Content = match msg {
-            Ok(msg) => msg,
-            Err(e) => {
-                let chat = Content::system(vec![
-                    Part::new(Data::from(format!("Error while iterating stream: {:?}", e)))
-                ]);
-                let _ = sender.send(Ok(frame_from_json(&chat))).await;
-                continue;
-            }
+    while let Some(resp) = match response_stream.next().await {
+        Ok(part) => part,
+        Err(e) => {
+            let chat = Content::system(vec![
+                Part::new(Data::from(format!("Error while iterating stream: {:?}", e)))
+            ]);
+            let _ = sender.send(Ok(frame_from_json(&chat))).await;
+            return false;
+        }
+    } {
+        let Some(candidate) = resp.candidates.first() else {
+            continue;
         };
 
-        history.push(msg.clone());
+        if candidate.finish_reason != /* STOP */ 1 && candidate.finish_reason != /* NONE */ 0 {
+            let chat = Content::system(vec![
+                Part::new(Data::from(format!("Generation failed with code: {:}", candidate.finish_reason)))
+            ]);
+            let _ = sender.send(Ok(frame_from_json(&chat))).await;
+            return false;
+        }
 
-        let _ = sender.send(Ok(frame_from_json(&msg))).await;
+        let Some(content) = &candidate.content else {
+            continue;
+        };
+        let content: Content = content.clone().into();
+
+        history.push(content.clone().into());
+
+        let _ = sender.send(Ok(frame_from_json(&content))).await;
 
         let mut function_responses: Vec<Part> = Vec::new();
 
-        for part in msg.parts {
+        for part in content.parts {
             let Some(data) = part.data else {
                 continue;
             };
