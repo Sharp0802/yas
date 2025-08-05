@@ -1,5 +1,8 @@
 # YAS(야스) : Yet Another Secretary
 
+- [한국어](README.md)
+- [영어](README.en.md)
+
 이 에이전트는 무료로 해줍니다
 
 (~~Gemini API Usage는 조상님이 사주냐고? 알게뭐야~~)
