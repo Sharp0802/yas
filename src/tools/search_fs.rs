@@ -139,32 +139,29 @@ fn respond_error(errors: Vec<String>) -> Struct {
         .collect();
 
     Struct {
-        fields: BTreeMap::from([("errors".to_string(), Value::from(errors))]),
+        fields: BTreeMap::from([
+            ("results".to_string(), Value::from(vec![])),
+            ("errors".to_string(), Value::from(errors))
+        ]),
     }
 }
 
-fn respond_success(data: Vec<FileEntry>) -> Struct {
-    let data = data
+fn respond(success: Vec<FileEntry>, errors: Vec<String>) -> Struct {
+    let success = success
         .into_iter()
         .map(|entry| <FileEntry as Into<Struct>>::into(entry.into()))
         .map(|s| Value::from(StructValue(s)))
         .collect::<Vec<Value>>();
+    let errors = errors
+        .into_iter()
+        .map(|v| Value::from(v))
+        .collect::<Vec<Value>>();
 
     Struct {
-        fields: BTreeMap::from([("results".to_string(), Value::from(data))]),
-    }
-}
-
-fn respond(call: FunctionCall, data: Vec<FileEntry>, errors: Vec<String>) -> FunctionResponse {
-    FunctionResponse {
-        id: call.id,
-        name: call.name,
-        response: Some(Struct {
-            fields: BTreeMap::from([
-                ("errors".to_string(), Value::from(StructValue(respond_error(errors)))),
-                ("results".to_string(), Value::from(StructValue(respond_success(data)))),
-            ]),
-        }),
+        fields: BTreeMap::from([
+            ("results".to_string(), Value::from(success)),
+            ("errors".to_string(), Value::from(errors))
+        ]),
     }
 }
 
@@ -172,27 +169,47 @@ pub fn handle_search_fs(call: FunctionCall) -> FunctionResponse {
     assert_eq!(call.name, "search_fs");
 
     let Some(args) = call.args.as_ref() else {
-        return respond(call, vec![], vec!["Argument is none".to_string()]);
+        return FunctionResponse{
+            id: call.id,
+            name: call.name,
+            response: Some(respond_error(vec!["Argument is none".to_string()])),
+        };
     };
 
     let Some(pattern_value) = args.fields.get("pattern") else {
-        return respond(call, vec![], vec!["Required argument 'pattern' is missing".to_string()]);
+        return FunctionResponse{
+            id: call.id,
+            name: call.name,
+            response: Some(respond_error(vec!["Required argument 'pattern' is missing".to_string()])),
+        };
     };
 
     let Some(kind) = &pattern_value.kind else {
-        return respond(call, vec![], vec!["Required argument 'pattern' is null".to_string()]);
+        return FunctionResponse{
+            id: call.id,
+            name: call.name,
+            response: Some(respond_error(vec!["Required argument 'pattern' is null".to_string()])),
+        };
     };
 
     let pattern = match kind {
         Kind::StringValue(s) => s,
         _ => {
-            return respond(call, vec![], vec!["String argument 'pattern' is not a string".to_string()]);
+            return FunctionResponse{
+                id: call.id,
+                name: call.name,
+                response: Some(respond_error(vec!["String argument 'pattern' is not a string".to_string()])),
+            };
         }
     };
 
     let (success, errors) = search_fs(pattern);
 
-    respond(call, success, errors)
+    FunctionResponse{
+        id: call.id,
+        name: call.name,
+        response: Some(respond(success, errors)),
+    }
 }
 
 pub fn search_fs_decl() -> FunctionDeclaration {
