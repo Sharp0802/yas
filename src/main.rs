@@ -1,0 +1,151 @@
+#![feature(coroutines)]
+#![feature(gen_blocks)]
+#![feature(async_iterator)]
+#![feature(str_as_str)]
+#![feature(associated_type_defaults)]
+
+mod tools;
+mod defs;
+mod chat;
+
+use crate::chat::{add_chat, process_chat};
+use crate::defs::*;
+use crate::tools::search_fs_decl;
+use bytes::Bytes;
+use dotenv::dotenv;
+use http::{header, Method, Request, Response, StatusCode};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper_util::rt::TokioIo;
+use std::convert::Infallible;
+use std::env::var_os;
+use std::error::Error;
+use std::net::SocketAddr;
+use std::sync::OnceLock;
+use google_ai_rs::{Client, GenerativeModel, Tool};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc::channel;
+use tokio_stream::wrappers::ReceiverStream;
+
+type ResponseResult = Result<Response<BoxBody<Bytes, Infallible>>, Box<dyn Error + Send + Sync>>;
+
+static CLIENT: OnceLock<Client> = OnceLock::new();
+static MODEL: OnceLock<GenerativeModel> = OnceLock::new();
+
+async fn get_chat() -> ResponseResult {
+    let chat = chat::get_chat().await;
+    let json = serde_json::to_string(&chat)?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(Full::from(Bytes::from(json)).boxed())
+        .unwrap())
+}
+
+async fn post_chat(req: Request<Incoming>) -> ResponseResult {
+    let body = req.collect().await?.to_bytes();
+    let chat = match serde_json::from_slice::<Content>(&body) {
+        Ok(chat) => chat,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(e.to_string())).boxed())?);
+        }
+    };
+
+    // 1. Create a thread-safe MPSC channel.
+    let (sender, receiver) = channel(256);
+
+    // 2. Spawn a new task to do the non-Sync work.
+    //    We move the sender and the chat data into this task.
+    tokio::spawn(async move {
+        add_chat(chat).await;
+        process_chat(sender).await;
+    });
+
+    // 3. Create a stream from the receiver. ReceiverStream is Send + Sync.
+    let stream = ReceiverStream::new(receiver);
+
+    // 4. Wrap it in StreamBody. This now works because the stream is Sync.
+    let stream_body = StreamBody::new(stream);
+
+    Ok(Response::builder()
+        .status(StatusCode::CREATED)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(stream_body.boxed())?) // .boxed() is now happy!
+}
+
+async fn handle_request(req: Request<Incoming>) -> ResponseResult {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => {
+            let body = Bytes::from_static(include_bytes!("www/index.html"));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/html")
+                .body(Full::new(body).boxed())?)
+        }
+
+        (&Method::GET, "/sse.js") => {
+            let body = Bytes::from_static(include_bytes!("www/sse.js"));
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/javascript")
+                .body(Full::new(body).boxed())?)
+        }
+
+        (&Method::GET, "/chat") => get_chat().await,
+
+        (&Method::POST, "/chat") => post_chat(req).await,
+
+        _ => Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Full::new(Bytes::from_static(b"Not Found")).boxed())?),
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    dotenv().ok();
+
+    let Some(api_key) = var_os("GEMINI_API_KEY") else {
+        panic!("variable GEMINI_API_KEY not set");
+    };
+    let Some(api_key) = api_key.to_str() else {
+        panic!("variable GEMINI_API_KEY has invalid characters");
+    };
+
+    let client = Client::new(api_key.into()).await?;
+    CLIENT.set(client).unwrap();
+
+    let mut model = GenerativeModel::new(CLIENT.get().unwrap(), "gemini-2.5-pro");
+
+    model.tools = Some(vec![Tool {
+        function_declarations: vec![search_fs_decl()],
+        ..Tool::default()
+    }]);
+
+    MODEL.set(model).unwrap();
+
+    let addr: SocketAddr = "0.0.0.0:8080".parse()?;
+    let listener = TcpListener::bind(addr).await?;
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+
+        tokio::task::spawn(async move {
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, service_fn(handle_request))
+                .await
+            {
+                eprintln!("error serving connection: {:?}", err);
+            }
+        });
+    }
+}
