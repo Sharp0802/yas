@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Chat</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="sse.js" type="module"></script>
+    <script src="main.js" type="module" defer></script>
+</head>
+<body>
+<div id="chat-container">
+    <main id="chat-log"></main>
+    <div id="form-container">
+        <form id="chat-form">
+            <textarea id="chat-input" required aria-label="Chat input"></textarea>
+            <button type="submit" aria-label="Send message">Send</button>
+        </form>
+    </div>
+</div>
+</body>
+</html>
