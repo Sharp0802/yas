@@ -6,17 +6,33 @@ use hyper::body::Frame;
 use lazy_static::lazy_static;
 use serde::Serialize;
 use std::convert::Infallible;
+use std::fs;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 
 lazy_static! {
-    static ref HISTORY: Mutex<Vec<Content>> = Mutex::new(vec![]);
+    static ref HISTORY: Mutex<Vec<Content>> = Mutex::new(load_history());
 }
 
 fn frame_from_json<T: Serialize>(v: &T) -> Frame<Bytes> {
     let json = serde_json::to_string(v).unwrap();
     let sse_event = format!("data: {}\n\n", json);
     Frame::data(Bytes::from(sse_event))
+}
+
+async fn save_history() {
+    let v = HISTORY.lock().await;
+    let v = serde_json::to_vec(&*v).unwrap();
+    fs::write("history.json", v).unwrap()
+}
+
+fn load_history() -> Vec<Content> {
+    let s = match fs::read_to_string("history.json") {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    serde_json::from_str(&s).unwrap_or_else(|_| vec![])
 }
 
 pub async fn get_chat() -> Vec<Content> {
@@ -126,4 +142,6 @@ async fn handle_function_call(call: FunctionCall) -> Result<FunctionResponse, St
 pub async fn process_chat(sender: Sender<Result<Frame<Bytes>, Infallible>>) {
     while process_chat_once(&sender).await {
     }
+
+    save_history().await;
 }
