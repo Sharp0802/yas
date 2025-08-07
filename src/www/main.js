@@ -6,6 +6,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatInput = document.getElementById('chat-input');
     const sendButton = chatForm.querySelector('button');
 
+    const htmlEncode = (input) => {
+        return input
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
     const scrollToBottom = () => {
         chatLog.scrollTop = chatLog.scrollHeight;
     };
@@ -26,18 +33,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 return `
                     <details class="accordion">
                         <summary>Function Call: ${part.name}</summary>
-                        <pre><code>${JSON.stringify(part.args, null, 2)}</code></pre>
+                        <pre><code>${htmlEncode(JSON.stringify(part.args, null, 2))}</code></pre>
                     </details>
                 `;
             case 'function_response':
                 return `
                     <details class="accordion">
                         <summary>Function Response: ${part.name}</summary>
-                        <pre><code>${JSON.stringify(part.response, null, 2)}</code></pre>
+                        <pre><code>${htmlEncode(JSON.stringify(part.response, null, 2))}</code></pre>
                     </details>
                 `;
             default:
-                return `<pre><code>${JSON.stringify(part, null, 2)}</code></pre>`;
+                return `<pre><code>${htmlEncode(JSON.stringify(part, null, 2))}</code></pre>`;
         }
     };
 
